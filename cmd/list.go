@@ -87,8 +87,21 @@ var listCmd = &cobra.Command{
 	},
 }
 
-// listAgentsLocal lists agents using the local runtime
+// listAgentsLocal lists agents using the local runtime.
+// It is a thin wrapper around fetchAgentsLocal that renders the result.
 func listAgentsLocal() error {
+	agents, err := fetchAgentsLocal()
+	if err != nil {
+		return err
+	}
+
+	return displayAgents(agents, listAll, false)
+}
+
+// fetchAgentsLocal returns agents from the local runtime as []api.AgentInfo,
+// without printing anything. It is the data half of listAgentsLocal, shared by
+// the `list` command and the `dashboard` TUI.
+func fetchAgentsLocal() ([]api.AgentInfo, error) {
 	rt := runtime.GetRuntime(projectPath, profile)
 	mgr := agent.NewManager(rt)
 
@@ -107,24 +120,34 @@ func listAgentsLocal() error {
 		}
 	}
 
-	agents, err := mgr.List(context.Background(), filters)
+	return mgr.List(context.Background(), filters)
+}
+
+// listAgentsViaHub lists agents using the Hub API.
+// It is a thin wrapper around fetchAgentsViaHub that renders the result.
+func listAgentsViaHub(hubCtx *HubContext) error {
+	PrintUsingHub(hubCtx.Endpoint)
+
+	agents, err := fetchAgentsViaHub(hubCtx)
 	if err != nil {
 		return err
 	}
 
-	return displayAgents(agents, listAll, false)
+	return displayAgents(agents, listAll, true)
 }
 
-// listAgentsViaHub lists agents using the Hub API
-func listAgentsViaHub(hubCtx *HubContext) error {
-	PrintUsingHub(hubCtx.Endpoint)
-
+// fetchAgentsViaHub returns agents from the Hub API as []api.AgentInfo,
+// without rendering them. It is the data half of listAgentsViaHub, shared by
+// the `list` command and the `dashboard` TUI. Status printing (e.g.
+// PrintUsingHub) stays in the caller so the dashboard's refresh loop does not
+// emit stderr noise on every tick.
+func fetchAgentsViaHub(hubCtx *HubContext) ([]api.AgentInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	parsedLabels, err := parseLabels(filterLabels)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	opts := &hubclient.ListAgentsOptions{
@@ -141,7 +164,7 @@ func listAgentsViaHub(hubCtx *HubContext) error {
 		// Get the project ID for the current project
 		projectID, err := GetProjectID(hubCtx)
 		if err != nil {
-			return wrapHubError(err)
+			return nil, wrapHubError(err)
 		}
 		opts.ProjectID = projectID
 		agentSvc = hubCtx.Client.ProjectAgents(projectID)
@@ -149,7 +172,7 @@ func listAgentsViaHub(hubCtx *HubContext) error {
 
 	resp, err := agentSvc.List(ctx, opts)
 	if err != nil {
-		return wrapHubError(fmt.Errorf("failed to list agents via Hub: %w", err))
+		return nil, wrapHubError(fmt.Errorf("failed to list agents via Hub: %w", err))
 	}
 
 	// Warn on stderr when results are truncated
@@ -170,7 +193,7 @@ func listAgentsViaHub(hubCtx *HubContext) error {
 	// Client-side enrichment: fetch broker/project names if not provided by Hub
 	enrichAgentsClientSide(ctx, hubCtx.Client, agents)
 
-	return displayAgents(agents, listAll, true)
+	return agents, nil
 }
 
 // enrichAgentsClientSide populates Grove and RuntimeBrokerName fields client-side
