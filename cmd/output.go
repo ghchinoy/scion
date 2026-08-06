@@ -107,4 +107,5 @@ var interactiveOnlyCommands = map[string]string{
 	"scion cdw":                       "it is a shell integration command",
 	"scion hub auth login":            "it requires interactive browser authentication",
 	"scion hub auth logout":           "it manages authentication state",
+	"scion dashboard":                 "it is a full-screen interactive terminal UI",
 }
