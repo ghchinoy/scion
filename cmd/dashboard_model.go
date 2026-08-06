@@ -60,6 +60,20 @@ type dashboardModel struct {
 	filtering bool   // true while the '/' filter input is active
 	filter    string // current filter query
 
+	// scopePath is the active project scope for fetches. It mirrors the
+	// package-level projectPath global that fetchAgentsLocal/fetchAgentsViaHub
+	// (and GetProjectID) read; the project switcher updates both together. See
+	// dashboard_projects.go.
+	scopePath string
+	scopeName string // human-friendly label for the active scope
+
+	// Project switcher state (see dashboard_projects.go). The picker is a
+	// full-screen panel toggled by 'p'; it does not mutate scope until Enter.
+	showProjects bool
+	projects     []config.ProjectInfo
+	projectsErr  error
+	projectSel   int
+
 	width  int
 	height int
 
@@ -71,9 +85,11 @@ type dashboardModel struct {
 // newDashboardModel builds the initial model. hubCtx may be nil (local mode).
 func newDashboardModel(hubCtx *HubContext, interval time.Duration) dashboardModel {
 	return dashboardModel{
-		hubCtx:   hubCtx,
-		interval: interval,
-		loading:  true,
+		hubCtx:    hubCtx,
+		interval:  interval,
+		loading:   true,
+		scopePath: projectPath,
+		scopeName: resolveScopeName(projectPath),
 	}
 }
 
@@ -131,6 +147,21 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFetch(msg.agents)
 		return m, nil
 
+	case rescopeMsg:
+		// Result of switching the active project via the picker: adopt the
+		// re-resolved Hub context and the first fetch against the new scope.
+		m.loading = false
+		m.lastUpdate = time.Now()
+		m.hubCtx = msg.hubCtx
+		if msg.err != nil {
+			m.lastErr = msg.err
+			return m, nil
+		}
+		m.lastErr = nil
+		m.selected = 0
+		m.applyFetch(msg.agents)
+		return m, nil
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -140,6 +171,9 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey routes a keypress based on whether the filter input is active.
 func (m dashboardModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.showProjects {
+		return m.handleProjectKey(msg)
+	}
 	if m.filtering {
 		return m.handleFilterKey(msg)
 	}
@@ -155,6 +189,8 @@ func (m dashboardModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 	case "s":
 		m.cycleSort()
+	case "p":
+		return m.openProjects()
 	}
 	return m, nil
 }
@@ -337,13 +373,19 @@ const (
 
 // View renders the dashboard.
 func (m dashboardModel) View() tea.View {
+	if m.showProjects {
+		view := tea.NewView(m.projectsView())
+		view.AltScreen = true
+		return view
+	}
+
 	var b strings.Builder
 
 	mode := "local"
 	if m.hubCtx != nil {
 		mode = "hub"
 	}
-	title := fmt.Sprintf("scion dashboard  (%s, refresh %s)", mode, m.interval)
+	title := fmt.Sprintf("scion dashboard  (%s, project: %s, refresh %s)", mode, m.scopeLabel(), m.interval)
 	b.WriteString(styleTitle.Render(title))
 	b.WriteString("\n\n")
 
@@ -433,7 +475,7 @@ func (m dashboardModel) renderFooter(count int) string {
 	}
 
 	help := fmt.Sprintf(
-		"%d agents  sort: %s  filter: %s  |  ↑/↓ j/k move · / filter · s sort · q quit",
+		"%d agents  sort: %s  filter: %s  |  ↑/↓ j/k move · / filter · s sort · p projects · q quit",
 		count, sortLabel, filterLabel,
 	)
 	return styleFooter.Render(help)
