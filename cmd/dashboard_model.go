@@ -74,6 +74,14 @@ type dashboardModel struct {
 	projectsErr  error
 	projectSel   int
 
+	// Hub-stats panel state (see dashboard_hub_stats.go). A single-pane summary
+	// toggled by 'h'; Hub-mode only. hubStatsLoaded distinguishes "not fetched
+	// yet" from "fetched, empty".
+	showHubStats   bool
+	hubStats       HubStats
+	hubStatsErr    error
+	hubStatsLoaded bool
+
 	width  int
 	height int
 
@@ -133,8 +141,24 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		// Re-fetch and re-arm the timer.
-		return m, tea.Batch(m.fetchCmd(), m.tickCmd())
+		// Re-fetch and re-arm the timer. When the Hub-stats panel is open in
+		// Hub mode, refresh it on the same tick (reusing the Phase 0 interval).
+		cmds := []tea.Cmd{m.fetchCmd(), m.tickCmd()}
+		if m.showHubStats && m.hubCtx != nil {
+			cmds = append(cmds, m.hubStatsCmd())
+		}
+		return m, tea.Batch(cmds...)
+
+	case hubStatsMsg:
+		m.hubStatsLoaded = true
+		m.lastUpdate = time.Now()
+		if msg.err != nil {
+			m.hubStatsErr = msg.err
+			return m, nil
+		}
+		m.hubStatsErr = nil
+		m.hubStats = msg.stats
+		return m, nil
 
 	case agentsMsg:
 		m.loading = false
@@ -171,6 +195,9 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey routes a keypress based on whether the filter input is active.
 func (m dashboardModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.showHubStats {
+		return m.handleHubStatsKey(msg)
+	}
 	if m.showProjects {
 		return m.handleProjectKey(msg)
 	}
@@ -191,6 +218,8 @@ func (m dashboardModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cycleSort()
 	case "p":
 		return m.openProjects()
+	case "h":
+		return m.openHubStats()
 	}
 	return m, nil
 }
@@ -373,6 +402,11 @@ const (
 
 // View renders the dashboard.
 func (m dashboardModel) View() tea.View {
+	if m.showHubStats {
+		view := tea.NewView(m.hubStatsView())
+		view.AltScreen = true
+		return view
+	}
 	if m.showProjects {
 		view := tea.NewView(m.projectsView())
 		view.AltScreen = true
@@ -475,7 +509,7 @@ func (m dashboardModel) renderFooter(count int) string {
 	}
 
 	help := fmt.Sprintf(
-		"%d agents  sort: %s  filter: %s  |  ↑/↓ j/k move · / filter · s sort · p projects · q quit",
+		"%d agents  sort: %s  filter: %s  |  ↑/↓ j/k move · / filter · s sort · p projects · h hub · q quit",
 		count, sortLabel, filterLabel,
 	)
 	return styleFooter.Render(help)
