@@ -41,8 +41,13 @@ project's agents.
 The dashboard shows the same agents as 'scion list' (Name, Template, Phase,
 Activity, Last Activity) and refreshes automatically. It is a read-only view:
 use the arrow keys or j/k to move the selection, '/' to filter, 's' to cycle
-the sort field, 'p' to switch the active project, 'h' for Hub stats, and 'q' or
-Ctrl+C to quit.
+the sort field, 'p' to switch the active project, 'h' for Hub stats, Enter to
+open a detail pane, and 'q' or Ctrl+C to quit.
+
+Press Enter on a selected agent to open the look/detail pane: a read-only,
+live-updating view of that agent's current terminal output (the same capture
+'scion look <agent>' shows), refreshed on the dashboard's interval. Esc returns
+to the agent list. It forwards no input to the agent's session.
 
 Press 'p' to open the project switcher: a picker listing the projects found by
 'scion project list'. Selecting one re-scopes the agent list to that project;

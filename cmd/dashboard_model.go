@@ -82,6 +82,17 @@ type dashboardModel struct {
 	hubStatsErr    error
 	hubStatsLoaded bool
 
+	// Look/detail pane state (see dashboard_detail.go). A single-pane, read-only
+	// view of one agent's live `tmux capture-pane` output, toggled by Enter on a
+	// selected row; Esc returns to the list. detailLoaded distinguishes "not
+	// captured yet" from "captured, empty".
+	showDetail   bool
+	detailName   string // human-friendly agent name (for the pane title)
+	detailSlug   string // agent slug used for the capture-pane exec
+	detailOutput string
+	detailErr    error
+	detailLoaded bool
+
 	width  int
 	height int
 
@@ -147,7 +158,28 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showHubStats && m.hubCtx != nil {
 			cmds = append(cmds, m.hubStatsCmd())
 		}
+		// When the detail pane is open, re-capture the agent's terminal output
+		// on the same tick so the pane live-updates without a second timer.
+		if m.showDetail && m.detailSlug != "" {
+			cmds = append(cmds, m.lookCmd())
+		}
 		return m, tea.Batch(cmds...)
+
+	case lookMsg:
+		// Ignore results from a previously-viewed agent (a stale capture that
+		// completes after the user switched rows or closed the pane).
+		if !m.showDetail || msg.agent != m.detailSlug {
+			return m, nil
+		}
+		m.detailLoaded = true
+		m.lastUpdate = time.Now()
+		if msg.err != nil {
+			m.detailErr = msg.err
+			return m, nil
+		}
+		m.detailErr = nil
+		m.detailOutput = msg.output
+		return m, nil
 
 	case hubStatsMsg:
 		m.hubStatsLoaded = true
@@ -195,6 +227,9 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey routes a keypress based on whether the filter input is active.
 func (m dashboardModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.showDetail {
+		return m.handleDetailKey(msg)
+	}
 	if m.showHubStats {
 		return m.handleHubStatsKey(msg)
 	}
@@ -220,6 +255,8 @@ func (m dashboardModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openProjects()
 	case "h":
 		return m.openHubStats()
+	case "enter":
+		return m.openDetail()
 	}
 	return m, nil
 }
@@ -402,6 +439,11 @@ const (
 
 // View renders the dashboard.
 func (m dashboardModel) View() tea.View {
+	if m.showDetail {
+		view := tea.NewView(m.detailView())
+		view.AltScreen = true
+		return view
+	}
 	if m.showHubStats {
 		view := tea.NewView(m.hubStatsView())
 		view.AltScreen = true
@@ -509,7 +551,7 @@ func (m dashboardModel) renderFooter(count int) string {
 	}
 
 	help := fmt.Sprintf(
-		"%d agents  sort: %s  filter: %s  |  ↑/↓ j/k move · / filter · s sort · p projects · h hub · q quit",
+		"%d agents  sort: %s  filter: %s  |  ↑/↓ j/k move · enter look · / filter · s sort · p projects · h hub · q quit",
 		count, sortLabel, filterLabel,
 	)
 	return styleFooter.Render(help)

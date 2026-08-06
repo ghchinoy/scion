@@ -73,16 +73,54 @@ var lookCmd = &cobra.Command{
 			return lookViaHub(hubCtx, agentName, execCmd)
 		}
 
-		rt := runtime.GetRuntime(projectPath, profile)
-
-		output, err := rt.Exec(context.Background(), agentName, execCmd)
+		output, err := captureLookOutput(nil, agentName, execCmd)
 		if err != nil {
-			return fmt.Errorf("failed to capture terminal output for agent '%s': %w", agentName, err)
+			return err
 		}
 
 		printLookOutput(output)
 		return nil
 	},
+}
+
+// captureLookOutput captures an agent's current terminal output — the same
+// `tmux capture-pane` read that `scion look` prints — and returns the raw
+// string with no rendering. The transport is selected by hubCtx: non-nil
+// captures via the Hub, nil captures via the local runtime. Both the `look`
+// CLI command and the dashboard's detail pane call this; the CLI wraps the
+// result with printLookOutput while the dashboard styles its own border.
+func captureLookOutput(hubCtx *HubContext, agentName string, execCmd []string) (string, error) {
+	if hubCtx != nil {
+		return captureLookViaHub(hubCtx, agentName, execCmd)
+	}
+
+	rt := runtime.GetRuntime(projectPath, profile)
+
+	output, err := rt.Exec(context.Background(), agentName, execCmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to capture terminal output for agent '%s': %w", agentName, err)
+	}
+	return output, nil
+}
+
+// captureLookViaHub is the fetch half of lookViaHub: it resolves the project
+// and captures the agent's terminal output through the Hub, returning the raw
+// string. It has no CLI side effects (no PrintUsingHub, no printing) so it is
+// safe to call from the dashboard event loop.
+func captureLookViaHub(hubCtx *HubContext, agentName string, execCmd []string) (string, error) {
+	projectID, err := GetProjectID(hubCtx)
+	if err != nil {
+		return "", wrapHubError(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := hubCtx.Client.ProjectAgents(projectID).Exec(ctx, agentName, execCmd, 10)
+	if err != nil {
+		return "", wrapHubError(fmt.Errorf("failed to capture terminal output for agent '%s': %w", agentName, err))
+	}
+	return resp.Output, nil
 }
 
 // printLookOutput prints the captured terminal output, optionally wrapped
@@ -115,20 +153,12 @@ func printLookOutput(output string) {
 func lookViaHub(hubCtx *HubContext, agentName string, execCmd []string) error {
 	PrintUsingHub(hubCtx.Endpoint)
 
-	projectID, err := GetProjectID(hubCtx)
+	output, err := captureLookViaHub(hubCtx, agentName, execCmd)
 	if err != nil {
-		return wrapHubError(err)
+		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	resp, err := hubCtx.Client.ProjectAgents(projectID).Exec(ctx, agentName, execCmd, 10)
-	if err != nil {
-		return wrapHubError(fmt.Errorf("failed to capture terminal output for agent '%s': %w", agentName, err))
-	}
-
-	printLookOutput(resp.Output)
+	printLookOutput(output)
 	return nil
 }
 
