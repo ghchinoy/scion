@@ -751,15 +751,25 @@ type explainAgentIdentity struct {
 	id        string
 	projectID string
 	ancestry  []string
+	scopes    []AgentTokenScope
 }
 
-func (a *explainAgentIdentity) ID() string                    { return a.id }
-func (a *explainAgentIdentity) Type() string                  { return "agent" }
-func (a *explainAgentIdentity) ProjectID() string             { return a.projectID }
-func (a *explainAgentIdentity) Scopes() []AgentTokenScope     { return nil }
-func (a *explainAgentIdentity) HasScope(AgentTokenScope) bool { return false }
-func (a *explainAgentIdentity) Ancestry() []string            { return a.ancestry }
-func (a *explainAgentIdentity) TokenID() string               { return "" }
+func (a *explainAgentIdentity) ID() string        { return a.id }
+func (a *explainAgentIdentity) Type() string      { return "agent" }
+func (a *explainAgentIdentity) ProjectID() string { return a.projectID }
+func (a *explainAgentIdentity) Scopes() []AgentTokenScope {
+	return a.scopes
+}
+func (a *explainAgentIdentity) HasScope(scope AgentTokenScope) bool {
+	for _, s := range a.scopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+func (a *explainAgentIdentity) Ancestry() []string { return a.ancestry }
+func (a *explainAgentIdentity) TokenID() string    { return "" }
 func (a *explainAgentIdentity) OriginUserID() string {
 	if len(a.ancestry) > 0 {
 		return a.ancestry[0]
@@ -770,10 +780,13 @@ func (a *explainAgentIdentity) OriginUserID() string {
 // newAgentIdentityFromStore creates an AgentIdentity from a store Agent record.
 // Used by the explain endpoint to resolve agent principals.
 func newAgentIdentityFromStore(agent *store.Agent) AgentIdentity {
+	role, additionalScopes := agentRoleAndScopes(agent)
+	scopes := append(ScopesForRole(role), additionalScopes...)
 	return &explainAgentIdentity{
 		id:        agent.ID,
 		projectID: agent.ProjectID,
 		ancestry:  agent.Ancestry,
+		scopes:    scopes,
 	}
 }
 

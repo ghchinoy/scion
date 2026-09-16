@@ -443,6 +443,56 @@ func TestExplainAPI_SuperAdminCanExplainForOthersViaDecide(t *testing.T) {
 	assert.NotEmpty(t, resp.Reason, "explain response must include a reason")
 }
 
+func TestExplainAPI_SuperAdminCanExplainForAgentPrincipal(t *testing.T) {
+	srv, s := testServer(t)
+	ctx := context.Background()
+
+	project := &store.Project{
+		ID: tid("explain-agent-project"), Name: "Explain Agent Test", Slug: "explain-agent",
+		CreatedBy: DevUserID, OwnerID: DevUserID,
+	}
+	require.NoError(t, s.CreateProject(ctx, project))
+
+	agentID := tid("explain-full-agent")
+	agent := &store.Agent{
+		ID:        agentID,
+		Name:      "explain-full-agent",
+		Slug:      "explain-full-agent",
+		ProjectID: project.ID,
+		Phase:     "running",
+		Ancestry:  []string{DevUserID},
+		AppliedConfig: &store.AgentAppliedConfig{
+			AgentRole: string(AgentRoleFull),
+		},
+	}
+	require.NoError(t, s.CreateAgent(ctx, agent))
+
+	require.NoError(t, s.CreateDelegationEdge(ctx, &store.DelegationEdge{
+		ID:            tid("edge-explain-full-agent"),
+		DelegatorType: store.DelegationPrincipalUser,
+		DelegatorID:   DevUserID,
+		DelegateType:  store.DelegationPrincipalAgent,
+		DelegateID:    agentID,
+		ScopeType:     store.RoleScopeProject,
+		ScopeID:       project.ID,
+		Role:          string(AgentRoleFull),
+		Active:        true,
+	}))
+
+	body := map[string]interface{}{
+		"resource":      map[string]interface{}{"type": "template", "projectId": project.ID},
+		"action":        "create",
+		"principalId":   agentID,
+		"principalKind": "agent",
+	}
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/authz/explain", body)
+	require.Equal(t, http.StatusOK, rec.Code, "super-admin explain for agent: %s", rec.Body.String())
+
+	var resp explainResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.True(t, resp.Allowed, "full-role agent should be allowed template.create in its project via explain endpoint, got reason: %s", resp.Reason)
+}
+
 func TestExplainAPI_NoSecretLeakage(t *testing.T) {
 	srv, s := testServer(t)
 
